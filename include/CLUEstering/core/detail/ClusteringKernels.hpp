@@ -240,7 +240,8 @@ namespace detail {
                                   TData outlier_distance,
                                   TData seeding_distance,
                                   TData min_density,
-                                  DistanceMetric metric) const {
+                                  DistanceMetric metric,
+								  std::size_t* nclusters) const {
       for (auto i : alpaka::uniformElements(acc, points.size())) {
         auto delta_i = std::numeric_limits<TData>::max();
         int nh_i = -1;
@@ -280,24 +281,8 @@ namespace detail {
 
         assert(nh_i == -1 || delta_i <= effective_distance);
         points.nearest_higher()[i] = nh_i;
-      }
-    }
-  };
 
-  struct KernelFindClusters {
-    template <typename TAcc, std::size_t Ndim, std::floating_point TData>
-	requires(alpaka::Dim<TAcc>::value == 1)
-    ALPAKA_FN_ACC void operator()(const TAcc& acc,
-                                  PointsView<Ndim, TData> points,
-                                  std::remove_cv_t<TData> min_density,
-								  std::size_t* nclusters) const {
-      for (auto i : alpaka::uniformElements(acc, points.size())) {
-        points.cluster_index()[i] = -1;
-        const auto nh = points.nearest_higher()[i];
-        const auto rho_i = points.rho()[i];
-        const auto density_uncertainty =
-		  points.has_uncertainty() ? points.density_uncertainty()[i] : TData{1.};
-        const auto is_seed = (nh == -1) && (rho_i >= min_density * density_uncertainty);
+        const auto is_seed = (nh_i == -1) && (rho_i >= effective_min_density);
 
 		if (is_seed) {
 		  points.is_seed()[i] = 1;
@@ -369,7 +354,8 @@ namespace detail {
                                     TData outlier_distance,
                                     TData seeding_distance,
                                     TData min_density,
-                                    const DistanceMetric& metric) {
+                                    const DistanceMetric& metric,
+									std::size_t* d_nclusters) {
     alpaka::exec<TAcc>(queue,
                        work_division,
                        KernelCalculateNearestHigher{},
@@ -378,21 +364,8 @@ namespace detail {
                        outlier_distance,
                        seeding_distance,
                        min_density,
-                       metric);
-  }
-
-  template <concepts::accelerator TAcc,
-            concepts::queue TQueue,
-            std::size_t Ndim,
-            std::floating_point TData>
-    requires(alpaka::Dim<TAcc>::value == 1)
-  inline void findClusterSeeds(TQueue& queue,
-                               const WorkDiv& work_division,
-                               PointsView<Ndim, TData>& points,
-                               std::remove_cv_t<TData> min_density,
-							   std::size_t* d_nclusters) {
-    alpaka::exec<TAcc>(
-					   queue, work_division, KernelFindClusters{}, points, min_density, d_nclusters);
+                       metric,
+					   d_nclusters);
   }
 
   template <concepts::accelerator TAcc,
