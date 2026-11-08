@@ -1,12 +1,16 @@
 
 #include "worker.hpp"
 #include "defines.hpp"
+#include "utils/generation.hpp"
 
 #include "CLUEstering/CLUEstering.hpp"
 #include "CLUEstering/data_structures/PointsHost.hpp"
 #include "CLUEstering/data_structures/PointsDevice.hpp"
 
 #include <alpaka/alpaka.hpp>
+
+#include <utility>
+#include <vector>
 
 namespace backend {
 
@@ -33,8 +37,26 @@ namespace backend {
 
   void destroyWorker(WorkerState* w) { delete w; }
 
-  void processEvent(WorkerState* w, clue::PointsHost<NDIM>& h_points) {
-    w->clusterer.make_clusters(w->queue, h_points, w->d_points);
+  struct EventStore {
+    std::vector<clue::PointsHost<NDIM>> events;
+  };
+
+  EventStore* createEvents(int nEvents, int nPoints, int nClusters) {
+    const auto device = alpaka::getDevByIdx(alpaka::Platform<Acc>{}, 0u);
+    Queue queue(device);
+    auto* store = new EventStore;
+    store->events.reserve(nEvents);
+    for (auto i = 0; i < nEvents; ++i) {
+      store->events.emplace_back(clue::utils::generateRandomData<NDIM>(
+          queue, nPoints, nClusters, std::make_pair(-100.f, 100.f), 1.f, 0.1f, i));
+    }
+    return store;
+  }
+
+  void destroyEvents(EventStore* s) { delete s; }
+
+  void processEvent(WorkerState* w, EventStore* s, int eventId) {
+    w->clusterer.make_clusters(w->queue, s->events[eventId], w->d_points);
     alpaka::wait(w->queue);
   }
 
