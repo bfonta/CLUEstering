@@ -38,7 +38,7 @@ namespace backend {
   void destroyWorker(WorkerState* w) { delete w; }
 
   struct EventStore {
-    std::vector<clue::PointsHost<NDIM>> events;
+    ::std::vector<clue::PointsHost<NDIM>> events;
   };
 
   EventStore* createEvents(int nEvents, int nPoints, int nClusters) {
@@ -48,7 +48,7 @@ namespace backend {
     store->events.reserve(nEvents);
     for (auto i = 0; i < nEvents; ++i) {
       store->events.emplace_back(clue::utils::generateRandomData<NDIM>(
-          queue, nPoints, nClusters, std::make_pair(-100.f, 100.f), 1.f, 0.1f, i));
+          queue, nPoints, nClusters, ::std::make_pair(-100.f, 100.f), 1.f, 0.1f, i));
     }
     return store;
   }
