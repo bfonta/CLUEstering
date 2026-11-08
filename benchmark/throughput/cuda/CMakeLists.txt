@@ -11,7 +11,8 @@ set_source_files_properties(${CMAKE_SOURCE_DIR}/worker.cpp PROPERTIES LANGUAGE
 add_library(cuda SHARED ${CMAKE_SOURCE_DIR}/worker.cpp)
 target_link_libraries(cuda PRIVATE alpaka::alpaka Boost::boost)
 target_include_directories(
-  cuda PRIVATE ${CMAKE_SOURCE_DIR}/../../include ${alpaka_SOURCE_DIR}/include
+  cuda PRIVATE ${CMAKE_SOURCE_DIR}/../../include ${CMAKE_SOURCE_DIR}/..
+               ${alpaka_SOURCE_DIR}/include
                ${Boost_INCLUDE_DIR})
 target_compile_definitions(cuda PRIVATE ALPAKA_ACC_GPU_CUDA_ENABLED)
 target_compile_options(cuda PRIVATE --expt-relaxed-constexpr)

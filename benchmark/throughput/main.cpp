@@ -1,13 +1,9 @@
 
 #include "worker.hpp"
 
-#include "CLUEstering/data_structures/PointsHost.hpp"
-#include "utils/generation.hpp"
 
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_arena.h>
-
-#include <alpaka/alpaka.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -17,18 +13,12 @@
 
 constexpr auto dc = 1.5f, rhoc = 10.f, outlier = 1.5f;
 
-using Event = clue::PointsHost<NDIM>;
-
 auto runEvents(int nCpuThreads, int nGpuStreams, int nEvents, int nPoints, int nClusters) {
-  const auto cpuDev = alpaka::getDevByIdx(alpaka::Platform<clue::alpaka_serial_sync::Acc1D>{}, 0u);
-  clue::alpaka_serial_sync::Queue genQueue(cpuDev);
-
-  std::vector<Event> events;
-  events.reserve(nEvents);
-  for (auto i = 0; i < nEvents; ++i) {
-    events.emplace_back(clue::utils::generateRandomData<NDIM>(
-        genQueue, nPoints, nClusters, std::make_pair(-100.f, 100.f), 1.f, 0.1f, i));
-  }
+  // events are generated once, before the clock starts, by the backends that have workers
+  auto* cpuEvents = nCpuThreads > 0 ? serial::createEvents(nEvents, nPoints, nClusters) : nullptr;
+#ifdef CLUE_HAS_CUDA
+  auto* gpuEvents = nGpuStreams > 0 ? cuda::createEvents(nEvents, nPoints, nClusters) : nullptr;
+#endif
 
   std::vector<serial::WorkerState*> cpuWorkers(nCpuThreads);
   for (auto& w : cpuWorkers)
@@ -59,7 +49,7 @@ auto runEvents(int nCpuThreads, int nGpuStreams, int nEvents, int nPoints, int n
           int id = eventCounter.fetch_add(1);
           if (id >= nEvents)
             return;
-          serial::processEvent(cpuWorkers[i], events[id]);
+          serial::processEvent(cpuWorkers[i], cpuEvents, id);
         }
       });
     });
@@ -76,7 +66,7 @@ auto runEvents(int nCpuThreads, int nGpuStreams, int nEvents, int nPoints, int n
           int id = eventCounter.fetch_add(1);
           if (id >= nEvents)
             return;
-          cuda::processEvent(gpuWorkers[i], events[id]);
+          cuda::processEvent(gpuWorkers[i], gpuEvents, id);
         }
       });
     });
@@ -92,9 +82,13 @@ auto runEvents(int nCpuThreads, int nGpuStreams, int nEvents, int nPoints, int n
 
   for (auto& w : cpuWorkers)
     serial::destroyWorker(w);
+  if (cpuEvents)
+    serial::destroyEvents(cpuEvents);
 #ifdef CLUE_HAS_CUDA
   for (auto& w : gpuWorkers)
     cuda::destroyWorker(w);
+  if (gpuEvents)
+    cuda::destroyEvents(gpuEvents);
 #endif
 
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
