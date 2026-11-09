@@ -20,31 +20,43 @@ CLUE_NAMESPACE_BEGIN
 
 namespace detail {
 
+  // Computes the bin of each element and, in the same pass, counts the elements per bin.
+  // `bin_sizes` must be zeroed before the launch.
   template <typename TFunc>
-  struct KernelComputeAssociations {
+  struct KernelComputeAssociationsAndSizes {
     template <typename TAcc>
       requires(alpaka::Dim<TAcc>::value == 1)
     ALPAKA_FN_ACC void operator()(const TAcc& acc,
                                   size_t size,
                                   int32_t* associations,
+                                  int32_t* bin_sizes,
                                   TFunc func) const {
       for (auto i : alpaka::uniformElements(acc, size)) {
-        associations[i] = func(i);
+        const auto bin = func(i);
+        associations[i] = bin;
+        if (bin >= 0)
+          alpaka::atomicAdd(acc, &bin_sizes[bin], 1);
       }
     }
     template <typename TAcc>
       requires(alpaka::Dim<TAcc>::value == 2)
     ALPAKA_FN_ACC void operator()(const TAcc& acc,
                                   int32_t* associations,
+                                  int32_t* bin_sizes,
                                   TFunc func,
                                   const auto* event_offsets,
-                                  std::size_t max_event_size,
-                                  std::size_t /* blocks_per_event */) const {
+                                  std::size_t max_event_size) const {
       for (auto event : alpaka::uniformElementsAlong<0u>(acc)) {
+        const auto begin = event_offsets[event];
+        const auto end = event_offsets[event + 1];
         for (auto local_idx : alpaka::uniformElementsAlong<1u>(acc, max_event_size)) {
-          auto global_idx = event_offsets[event] + local_idx;
-          if (global_idx < event_offsets[event + 1])
-            associations[global_idx] = func(global_idx, event);
+          const auto global_idx = begin + local_idx;
+          if (global_idx < end) {
+            const auto bin = func(global_idx, event);
+            associations[global_idx] = bin;
+            if (bin >= 0)
+              alpaka::atomicAdd(acc, &bin_sizes[bin], 1);
+          }
         }
       }
     }
@@ -338,17 +350,15 @@ ALPAKA_FN_HOST inline void AssociationMap<TDev>::fill(size_type size,
   const auto blocksize = 512;
   const auto gridsize = divide_up_by(size, blocksize);
   const auto workdiv = make_workdiv<TAcc>(gridsize, blocksize);
-  alpaka::exec<TAcc>(
-      queue, workdiv, detail::KernelComputeAssociations<TFunc>{}, size, bin_buffer.data(), func);
-
   auto sizes_buffer = internal::alloc_device_buffer<int32_t>(queue, m_extents.keys, allocator);
-  alpaka::memset(queue, sizes_buffer, 0);
+  alpaka::memset(queue, sizes_buffer, 0);  // must precede the kernel
   alpaka::exec<TAcc>(queue,
                      workdiv,
-                     detail::KernelComputeAssociationSizes{},
+                     detail::KernelComputeAssociationsAndSizes<TFunc>{},
+                     size,
                      bin_buffer.data(),
                      sizes_buffer.data(),
-                     size);
+                     func);
 
   auto temp_offsets = internal::alloc_device_buffer<int32_t>(queue, m_extents.keys + 1, allocator);
   alpaka::memset(queue, temp_offsets, 0u, 1u);
@@ -455,24 +465,18 @@ ALPAKA_FN_HOST inline void AssociationMap<TDev>::fill_batch(TQueue& queue,
   const auto batch_size = alpaka::getExtents(event_offsets)[0] - 1;
   const auto batch_workdiv =
       make_workdiv<internal::Acc2D>({batch_size, blocks_per_event}, {1, blocksize});
+  auto sizes_buffer = internal::alloc_device_buffer<int32_t>(queue, m_extents.keys, allocator);
+  alpaka::memset(queue, sizes_buffer, 0);  // must precede the kernel
   alpaka::exec<internal::Acc2D>(queue,
                                 batch_workdiv,
-                                detail::KernelComputeAssociations<TFunc>{},
+                                detail::KernelComputeAssociationsAndSizes<TFunc>{},
                                 bin_buffer.data(),
+                                sizes_buffer.data(),
                                 func,
                                 event_offsets.data(),
-                                max_event_size,
-                                blocks_per_event);
+                                max_event_size);
 
-  auto sizes_buffer = internal::alloc_device_buffer<int32_t>(queue, m_extents.keys, allocator);
   const auto workdiv = make_workdiv<TAcc>(divide_up_by(size, blocksize), blocksize);
-  alpaka::memset(queue, sizes_buffer, 0);
-  alpaka::exec<TAcc>(queue,
-                     workdiv,
-                     detail::KernelComputeAssociationSizes{},
-                     bin_buffer.data(),
-                     sizes_buffer.data(),
-                     size);
 
   auto temp_offsets = internal::alloc_device_buffer<int32_t>(queue, m_extents.keys + 1, allocator);
   alpaka::memset(queue, temp_offsets, 0u, 1u);
